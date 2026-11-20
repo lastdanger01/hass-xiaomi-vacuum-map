@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from typing import Any
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
@@ -22,6 +23,19 @@ from .const import (
 from .map_renderer import draw
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _obj_name(value: Any) -> str:
+    """Take the name of a map out of what the vacuum of xiaomi_miot gives.
+
+    The name of the map was a plain string before, but it is a dict with
+    the name and the number of the map in it now. Both are understood.
+    """
+    if isinstance(value, dict):
+        value = value.get("obj_name") or value.get("obj") or ""
+    if not value:
+        return ""
+    return str(value)
 
 
 def _placeholder() -> bytes:
@@ -64,7 +78,7 @@ def _find_vacuum(hass: HomeAssistant, did: str) -> str | None:
     for state in hass.states.async_all("vacuum"):
         attributes = state.attributes
         # The map of the robot is named after the robot itself.
-        name = str(attributes.get("vacuum_map.map_obj_name", ""))
+        name = _obj_name(attributes.get("vacuum_map.map_obj_name"))
         if did and did not in name:
             continue
         if attributes.get("vacuum_map.vacuum_position") is not None:
@@ -139,13 +153,15 @@ class XiaomiVacuumMapCamera(Camera):
             if not raw:
                 continue
             # The map of the robot is named after the robot itself.
-            name = str(state.attributes.get("vacuum_map.map_obj_name", ""))
+            name = _obj_name(state.attributes.get("vacuum_map.map_obj_name"))
             if did and did not in name:
                 continue
-            try:
-                value = json.loads(raw)
-            except (TypeError, ValueError):
-                continue
+            value = raw
+            if isinstance(value, (str, bytes)):
+                try:
+                    value = json.loads(value)
+                except (TypeError, ValueError):
+                    continue
             position = value.get("position") if isinstance(value, dict) else value
             if not isinstance(position, (list, tuple)) or len(position) < 2:
                 continue
@@ -176,7 +192,7 @@ class XiaomiVacuumMapCamera(Camera):
             if state not in candidates:
                 candidates.append(state)
         for state in candidates:
-            name = str(state.attributes.get("vacuum_map.map_obj_name", ""))
+            name = _obj_name(state.attributes.get("vacuum_map.map_obj_name"))
             if not name:
                 continue
             if did and did not in name:
