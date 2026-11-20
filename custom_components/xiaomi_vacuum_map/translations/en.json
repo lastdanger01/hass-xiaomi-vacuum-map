@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Xiaomi vacuum map",
+        "description": "The map is read from the cloud of Xiaomi. The account of the integration xiaomi_miot is used when it is there."
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect"
+    },
+    "abort": {
+      "already_configured": "The map of the robot is already set up"
+    }
+  }
+}

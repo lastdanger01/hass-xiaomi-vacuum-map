@@ -1,0 +1,13 @@
+{
+  "domain": "xiaomi_vacuum_map",
+  "name": "Xiaomi Vacuum Map",
+  "codeowners": ["@lastdanger01"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/lastdanger01/hass-xiaomi-vacuum-map",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/lastdanger01/hass-xiaomi-vacuum-map/issues",
+  "platforms": ["camera"],
+  "requirements": ["Pillow"],
+  "version": "0.1.0"
+}
