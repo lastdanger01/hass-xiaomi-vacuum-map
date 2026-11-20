@@ -87,6 +87,10 @@ def draw(map_data: dict[str, Any], position: list | None = None,
     image = Image.new("RGB", (width * scale, height * scale), FREE)
     painter = ImageDraw.Draw(image)
     for row in range(height):
+        # The grid of the robot starts at the bottom of the house and
+        # goes up, but the first row of a picture is the top of it, so
+        # the rows are put in the picture the other way round.
+        y0 = (height - 1 - row) * scale
         for col in range(width):
             value = grid[row * width + col]
             if value == 0:
@@ -98,7 +102,6 @@ def draw(map_data: dict[str, Any], position: list | None = None,
             else:
                 color = rooms.get(value, (150, 150, 150))
             x0 = col * scale
-            y0 = row * scale
             painter.rectangle([x0, y0, x0 + scale - 1, y0 + scale - 1], fill=color)
 
     origin_x = float(map_data.get("origin_x", 0))
@@ -106,7 +109,11 @@ def draw(map_data: dict[str, Any], position: list | None = None,
     resolution = float(map_data.get("resolution", 50) or 50)
 
     def cell_of(x: Any, y: Any) -> tuple[int, int] | None:
-        """The cell of the map of the given place in the house."""
+        """The cell of the map of the given place in the house.
+
+        The row is the row of the grid of the robot, which starts at the
+        bottom of the house.
+        """
         if x is None or y is None:
             return None
         col = int(round((float(x) - origin_x) / resolution))
@@ -115,14 +122,17 @@ def draw(map_data: dict[str, Any], position: list | None = None,
             return None
         return col, row
 
+    def pixel_of(cell: tuple[int, int]) -> tuple[int, int]:
+        """The place in the picture of a cell of the grid."""
+        col, row = cell
+        return col * scale + scale // 2, (height - 1 - row) * scale + scale // 2
+
     def mark(x: Any, y: Any, color: tuple[int, int, int], name: str) -> None:
         cell = cell_of(x, y)
         if cell is None:
             return
-        col, row = cell
+        cx, cy = pixel_of(cell)
         radius = 3 * scale
-        cx = col * scale + scale // 2
-        cy = row * scale + scale // 2
         painter.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
                         fill=color, outline=(255, 255, 255), width=1)
 
@@ -138,8 +148,7 @@ def draw(map_data: dict[str, Any], position: list | None = None,
                 continue
             color = PATH if path[index][0] == 1 else PATH_DONE
             painter.line(
-                [(start[0] * scale + scale // 2, start[1] * scale + scale // 2),
-                 (end[0] * scale + scale // 2, end[1] * scale + scale // 2)],
+                [pixel_of(start), pixel_of(end)],
                 fill=color, width=max(1, scale),
             )
 
