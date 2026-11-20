@@ -1,9 +1,8 @@
 """The camera that shows the map of the robot."""
 
+import asyncio
 import json
 import logging
-import threading
-import time
 from typing import Any
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
@@ -18,11 +17,19 @@ from .const import (
     DEFAULT_DID,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    LIVE_SCAN_INTERVAL,
     MAP_OBJECTS,
+    WATCH_INTERVAL,
 )
 from .map_renderer import draw, unpack_path
 
 _LOGGER = logging.getLogger(__name__)
+
+# The states of the vacuum that mean that the robot is on the move.
+ACTIVE_STATES = ("cleaning", "returning")
+
+# The states of the sensor of the work of the robot that mean the same.
+ACTIVE_SENSOR_STATES = ("sweeping", "mopping")
 
 
 def _obj_name(value: Any) -> str:
@@ -62,7 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
     # The map is read from the cloud, that takes longer than the ten
     # seconds that Home Assistant gives for a picture. So the picture is
     # fetched in the background, before it is asked for.
-    camera.start_refresh()
+    await camera.async_start()
     # The place of the robot is taken from the vacuum of xiaomi_miot.
     # That vacuum is looked for again later, because the place of the
     # robot only shows up after the first update from the cloud.
@@ -102,11 +109,15 @@ class XiaomiVacuumMapCamera(Camera):
         self.content_type = "image/png"
         self._image: bytes | None = None
         self._last_fetch = 0.0
-        self._lock = threading.Lock()
         self._busy = False
         self._vacuum_entity: str | None = None
         self._position: list | None = None
         self._map_object: str | None = None
+        self._trajectory_object: str | None = None
+        self._map_data: dict | None = None
+        self._moving = False
+        self._task: asyncio.Task | None = None
+        self._unsub: Any = None
 
     @property
     def extra_state_attributes(self):
@@ -118,6 +129,8 @@ class XiaomiVacuumMapCamera(Camera):
             "has_picture": self._image is not None,
             "robot_position": self._position,
             "live_map_object": self._map_object,
+            "trajectory_object": self._trajectory_object,
+            "moving": self._moving,
         }
 
     def set_vacuum_entity(self, entity_id: str) -> None:
@@ -200,6 +213,32 @@ class XiaomiVacuumMapCamera(Camera):
             return name
         return None
 
+    def _read_trajectory_object(self) -> str | None:
+        """Take the name of the file with the path of the robot.
+
+        The integration xiaomi_miot keeps it in the state of the vacuum,
+        as the name of the object of the trajectory. That name is better
+        than guessing it, because the number of the path does not have
+        to be the one right after the number of the map.
+        """
+        did = self._data.get("did") or ""
+        candidates = []
+        if self._vacuum_entity:
+            state = self.hass.states.get(self._vacuum_entity)
+            if state is not None:
+                candidates.append(state)
+        for state in self.hass.states.async_all("vacuum"):
+            if state not in candidates:
+                candidates.append(state)
+        for state in candidates:
+            name = _obj_name(state.attributes.get("vacuum_map.trajectory_obj_name"))
+            if not name:
+                continue
+            if did and did not in name:
+                continue
+            return name
+        return None
+
     def _on_state_changed(self, event) -> None:
         """Keep the place of the robot up to date."""
         entity_id = event.data.get("entity_id")
@@ -209,8 +248,12 @@ class XiaomiVacuumMapCamera(Camera):
         position = self._read_position()
         if position is None or position == before:
             return
-        # The picture has to be drawn again with the new place.
-        self.start_refresh()
+        # The picture has to be drawn again with the new place. The
+        # event comes from a thread, so the work is put on the loop of
+        # the events of Home Assistant.
+        self.hass.loop.call_soon_threadsafe(
+            lambda: self.hass.async_create_task(self.async_refresh())
+        )
 
     def _read_path(self, cloud) -> list[tuple[int, int, int]] | None:
         """Read the path that the robot drove from the cloud.
@@ -218,6 +261,18 @@ class XiaomiVacuumMapCamera(Camera):
         The path is in a file of its own, the one right after the map of
         the robot in the cloud of Xiaomi.
         """
+        name = self._trajectory_object or self._read_trajectory_object()
+        if name:
+            content = cloud.get_file(name)
+            if content:
+                points = unpack_path(content)
+                if points:
+                    self._trajectory_object = name
+                    _LOGGER.info("the path of the robot is read, %s points",
+                                 len(points))
+                    return points
+        # The name of the trajectory is not always there. The path is
+        # then the file right after the map of the robot.
         name = self._map_object or self._read_map_object()
         if not name:
             return None
@@ -238,8 +293,13 @@ class XiaomiVacuumMapCamera(Camera):
         _LOGGER.info("the path of the robot is read, %s points", len(points))
         return points
 
-    def _fetch(self) -> bytes | None:
-        """Read the map from the cloud and draw it."""
+    def _fetch_map(self) -> dict | None:
+        """Read the map of the robot from the cloud.
+
+        The map does not change while the robot drives, so it is only
+        read again when the robot writes a new one. The path of the
+        robot is a file of its own and changes all the time.
+        """
         cloud = self._data["cloud"]
         did = self._data.get("did") or DEFAULT_DID
 
@@ -261,11 +321,34 @@ class XiaomiVacuumMapCamera(Camera):
         if not map_data:
             _LOGGER.warning("the map of the robot could not be read")
             return None
+        return map_data
+
+    def _fetch(self) -> bytes | None:
+        """Read the map from the cloud and draw it."""
+        cloud = self._data["cloud"]
+        did = self._data.get("did") or DEFAULT_DID
+
+        map_data = self._map_data
+        # The robot writes a new map when it starts to clean. The map
+        # is only read again when that happens.
+        live_object = self._read_map_object()
+        if live_object and live_object != self._map_object:
+            self._map_data = None
+        if not map_data or self._map_data is None:
+            map_data = self._fetch_map()
+            if not map_data:
+                return None
+            self._map_data = map_data
 
         position = self._read_position()
+        # The place of the robot in the state of the vacuum is only
+        # changed now and then, so the cloud is asked as well. The
+        # answer of the cloud is the place where the robot really is.
+        cloud_position = cloud.get_position(did)
+        if cloud_position:
+            position = cloud_position
         if position is None:
-            # The place of the robot is asked from the cloud itself.
-            position = cloud.get_position(did)
+            position = self._read_position()
 
         # The path that the robot drove is a file of its own, right
         # after the map of the robot.
@@ -280,48 +363,100 @@ class XiaomiVacuumMapCamera(Camera):
                      len(picture), position)
         return picture
 
-    def refresh(self) -> None:
+    async def async_refresh(self) -> None:
         """Fetch the map again and keep the picture."""
-        with self._lock:
-            if self._busy:
-                return
-            self._busy = True
+        if self._busy:
+            return
+        self._busy = True
         try:
-            image = self._fetch()
+            # The call to the cloud is slow, so it does not hold up the
+            # loop of the events of Home Assistant.
+            image = await self.hass.async_add_executor_job(self._fetch)
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("the map of the robot could not be fetched")
+            image = None
         finally:
-            with self._lock:
-                self._busy = False
+            self._busy = False
         if image:
-            with self._lock:
-                self._image = image
-                self._last_fetch = time.time()
-            # The picture is fetched in a thread, so the state of the
-            # entity has to be written from the event loop.
-            try:
-                self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
-            except RuntimeError:
-                # Home Assistant is shutting down.
-                pass
+            self._image = image
+            self._last_fetch = _now()
+            self.async_write_ha_state()
 
-    def start_refresh(self) -> None:
-        """Fetch the map in the background."""
-        threading.Thread(target=self.refresh, daemon=True).start()
+    def _robot_is_moving(self) -> bool:
+        """Tell whether the robot is on the move.
+
+        While the robot drives, the path that it drove changes all the
+        time. The map is then fetched much more often than when the
+        robot stands still.
+        """
+        for state in self.hass.states.async_all("vacuum"):
+            if state.state in ACTIVE_STATES:
+                return True
+        for state in self.hass.states.async_all("sensor"):
+            if state.state in ACTIVE_SENSOR_STATES:
+                return True
+        return False
+
+    async def _watch(self) -> None:
+        """Keep the map up to date in the background.
+
+        Without this, the map is only fetched when somebody looks at
+        it, and then only once every five minutes. The path of the
+        robot is then much too late, because the robot drives on.
+
+        The map is fetched every few seconds, also when the robot
+        stands still. The place of the robot in the picture is taken
+        from the state of the vacuum of xiaomi_miot, and that state
+        only changes now and then. So the picture is only drawn again
+        when something really changed, but the path of the robot is
+        read all the time.
+        """
+        while True:
+            await asyncio.sleep(WATCH_INTERVAL)
+            try:
+                moving = self._robot_is_moving()
+                self._moving = moving
+                # The map itself is kept and only the path of the robot
+                # is read again, so the picture can be refreshed all the
+                # time. The place of the robot also comes back then, so
+                # the robot is at the dock in the picture as soon as it
+                # is there.
+                if self._image is not None and _now() - self._last_fetch > LIVE_SCAN_INTERVAL:
+                    await self.async_refresh()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pylint: disable=broad-except
+                # The watcher must not stop when something goes wrong
+                # once.
+                _LOGGER.exception("the watcher of the map failed")
+
+    async def async_start(self) -> None:
+        """Start the watcher that keeps the map up to date."""
+        await self.async_refresh()
+        self._task = self.hass.async_create_task(self._watch())
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop the watcher when the camera goes away."""
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None
 
     def camera_image(self, width: int | None = None,
-                    height: int | None = None) -> bytes | None:
+                     height: int | None = None) -> bytes | None:
         """Give the picture of the map.
 
         The picture is fetched in the background, so this call is quick.
         """
-        with self._lock:
-            image = self._image
-            last_fetch = self._last_fetch
-        if image is None:
-            self.start_refresh()
+        if self._image is None:
+            self.hass.loop.call_soon_threadsafe(
+                lambda: self.hass.async_create_task(self.async_refresh())
+            )
             return _placeholder()
-        if time.time() - last_fetch > DEFAULT_SCAN_INTERVAL:
-            self.start_refresh()
-        return image
+        if _now() - self._last_fetch > LIVE_SCAN_INTERVAL:
+            self.hass.loop.call_soon_threadsafe(
+                lambda: self.hass.async_create_task(self.async_refresh())
+            )
+        return self._image
 
     async def async_camera_image(self, width: int | None = None,
                                  height: int | None = None) -> bytes | None:
@@ -332,12 +467,15 @@ class XiaomiVacuumMapCamera(Camera):
         are often busy with the cameras that talk to a device, and a
         picture that waits for a worker would come too late.
         """
-        with self._lock:
-            image = self._image
-            last_fetch = self._last_fetch
-        if image is None:
-            self.start_refresh()
+        if self._image is None:
+            self.hass.async_create_task(self.async_refresh())
             return _placeholder()
-        if time.time() - last_fetch > DEFAULT_SCAN_INTERVAL:
-            self.start_refresh()
-        return image
+        if _now() - self._last_fetch > LIVE_SCAN_INTERVAL:
+            self.hass.async_create_task(self.async_refresh())
+        return self._image
+
+
+def _now() -> float:
+    """The time of now, in seconds."""
+    import time
+    return time.time()
