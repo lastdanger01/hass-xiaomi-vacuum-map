@@ -92,6 +92,7 @@ class XiaomiVacuumMapCamera(Camera):
         self._busy = False
         self._vacuum_entity: str | None = None
         self._position: list | None = None
+        self._map_object: str | None = None
 
     @property
     def extra_state_attributes(self):
@@ -102,6 +103,7 @@ class XiaomiVacuumMapCamera(Camera):
             "last_fetch": self._last_fetch,
             "has_picture": self._image is not None,
             "robot_position": self._position,
+            "live_map_object": self._map_object,
         }
 
     def set_vacuum_entity(self, entity_id: str) -> None:
@@ -157,6 +159,31 @@ class XiaomiVacuumMapCamera(Camera):
             return self._position
         return fallback
 
+    def _read_map_object(self) -> str | None:
+        """Take the name of the map of the robot from the vacuum.
+
+        While the robot cleans, it writes a map of its own. The name of
+        that map changes with every cleaning, so it is taken from the
+        vacuum of xiaomi_miot instead of being written down here.
+        """
+        did = self._data.get("did") or ""
+        candidates = []
+        if self._vacuum_entity:
+            state = self.hass.states.get(self._vacuum_entity)
+            if state is not None:
+                candidates.append(state)
+        for state in self.hass.states.async_all("vacuum"):
+            if state not in candidates:
+                candidates.append(state)
+        for state in candidates:
+            name = str(state.attributes.get("vacuum_map.map_obj_name", ""))
+            if not name:
+                continue
+            if did and did not in name:
+                continue
+            return name
+        return None
+
     def _on_state_changed(self, event) -> None:
         """Keep the place of the robot up to date."""
         entity_id = event.data.get("entity_id")
@@ -175,12 +202,19 @@ class XiaomiVacuumMapCamera(Camera):
         did = self._data.get("did") or DEFAULT_DID
 
         map_data = None
-        # The first map that is there is the one that is used.
+        # The map of the robot that is cleaning now comes first, then
+        # the map that is written down.
+        live_object = self._read_map_object()
+        names = []
+        if live_object:
+            names.append(live_object)
         for obj_name in (self._data.get("map"), *MAP_OBJECTS):
-            if not obj_name:
-                continue
+            if obj_name and obj_name not in names:
+                names.append(obj_name)
+        for obj_name in names:
             map_data = cloud.get_map(obj_name)
             if map_data:
+                self._map_object = obj_name
                 break
         if not map_data:
             _LOGGER.warning("the map of the robot could not be read")
