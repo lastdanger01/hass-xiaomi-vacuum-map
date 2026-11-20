@@ -20,7 +20,7 @@ from .const import (
     DOMAIN,
     MAP_OBJECTS,
 )
-from .map_renderer import draw
+from .map_renderer import draw, unpack_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -212,6 +212,32 @@ class XiaomiVacuumMapCamera(Camera):
         # The picture has to be drawn again with the new place.
         self.start_refresh()
 
+    def _read_path(self, cloud) -> list[tuple[int, int, int]] | None:
+        """Read the path that the robot drove from the cloud.
+
+        The path is in a file of its own, the one right after the map of
+        the robot in the cloud of Xiaomi.
+        """
+        name = self._read_map_object()
+        if not name:
+            return None
+        parts = name.split("/")
+        if len(parts) < 3:
+            return None
+        try:
+            number = int(parts[-1])
+        except ValueError:
+            return None
+        path_name = "/".join(parts[:-1] + [str(number + 1)])
+        content = cloud.get_file(path_name)
+        if not content:
+            return None
+        points = unpack_path(content)
+        if not points:
+            return None
+        _LOGGER.info("the path of the robot is read, %s points", len(points))
+        return points
+
     def _fetch(self) -> bytes | None:
         """Read the map from the cloud and draw it."""
         cloud = self._data["cloud"]
@@ -240,8 +266,13 @@ class XiaomiVacuumMapCamera(Camera):
         if position is None:
             # The place of the robot is asked from the cloud itself.
             position = cloud.get_position(did)
+
+        # The path that the robot drove is a file of its own, right
+        # after the map of the robot.
+        path = self._read_path(cloud)
+
         try:
-            picture = draw(map_data, position)
+            picture = draw(map_data, position, path=path)
         except (ValueError, KeyError, TypeError) as err:
             _LOGGER.error("the map of the robot could not be drawn: %s", err)
             return None

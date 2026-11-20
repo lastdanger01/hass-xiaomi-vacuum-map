@@ -228,6 +228,20 @@ class XiaomiCloud:
 
     def get_map(self, obj_name: str) -> dict[str, Any] | None:
         """Get the json of the map with the given name."""
+        content = self.get_file(obj_name)
+        if not content:
+            return None
+        try:
+            return json.loads(content)
+        except ValueError:
+            return None
+
+    def get_file(self, obj_name: str) -> bytes | None:
+        """Get the file of the cloud with the given name.
+
+        The map of the robot is a json file, and the path that the robot
+        drove is a file of its own. Both come from the same place.
+        """
         url = self.get_api_url() + MAP_ENDPOINT
         params = {"data": json.dumps({"obj_name": obj_name}, separators=(",", ":"))}
         answer = self._call(url, params)
@@ -241,10 +255,7 @@ class XiaomiCloud:
             return None
         if response.status_code != 200 or not response.content:
             return None
-        try:
-            return json.loads(response.content)
-        except ValueError:
-            return None
+        return response.content
 
     def get_position(self, did: str) -> list | None:
         """Get the place of the robot, it does not move the robot."""
