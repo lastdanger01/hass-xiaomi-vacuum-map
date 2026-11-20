@@ -51,8 +51,9 @@ def unpack_path(content: bytes) -> list[tuple[int, int, int]]:
     point, and the place of it as two little endian numbers of two
     bytes, in the millimetres of the house.
 
-    The kind of the point says what it is: 0 is a point of the path
-    that was driven, 1 is a point where the robot is now.
+    The kind of the point says what it is: 0 is a point of the way to
+    the room and of the way back to the dock, 1 is a point of the path
+    that was really swept.
     """
     try:
         raw = base64.b64decode(content)
@@ -126,21 +127,20 @@ def draw(map_data: dict[str, Any], position: list | None = None,
                         fill=color, outline=(255, 255, 255), width=1)
 
     # The path that the robot drove is drawn as a line of the points of
-    # it. The points of the path that is done are grey, the ones of the
-    # path that is being driven now are in colour.
+    # it. The part that was really swept is in colour, the way to the
+    # room and the way back to the dock is grey.
     if path:
-        done = [(x, y) for kind, x, y in path if kind == 0]
-        now = [(x, y) for kind, x, y in path if kind != 0]
-        for points, color in ((done, PATH_DONE), (now, PATH)):
-            cells = [cell_of(x, y) for x, y in points]
-            cells = [c for c in cells if c is not None]
-            if len(cells) < 2:
+        cells = [cell_of(x, y) for _, x, y in path]
+        for index in range(len(path) - 1):
+            start = cells[index]
+            end = cells[index + 1]
+            if start is None or end is None:
                 continue
+            color = PATH if path[index][0] == 1 else PATH_DONE
             painter.line(
-                [(c[0] * scale + scale // 2, c[1] * scale + scale // 2)
-                 for c in cells],
+                [(start[0] * scale + scale // 2, start[1] * scale + scale // 2),
+                 (end[0] * scale + scale // 2, end[1] * scale + scale // 2)],
                 fill=color, width=max(1, scale),
-                joint="curve",
             )
 
     mark(map_data.get("pile_x"), map_data.get("pile_y"), DOCK, "dock")
