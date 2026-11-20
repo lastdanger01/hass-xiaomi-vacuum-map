@@ -218,7 +218,7 @@ class XiaomiVacuumMapCamera(Camera):
         The path is in a file of its own, the one right after the map of
         the robot in the cloud of Xiaomi.
         """
-        name = self._read_map_object()
+        name = self._map_object or self._read_map_object()
         if not name:
             return None
         parts = name.split("/")
