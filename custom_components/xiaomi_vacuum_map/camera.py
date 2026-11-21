@@ -114,7 +114,6 @@ class XiaomiVacuumMapCamera(Camera):
         self._position: list | None = None
         self._map_object: str | None = None
         self._trajectory_object: str | None = None
-        self._map_data: dict | None = None
         self._moving = False
         self._task: asyncio.Task | None = None
         self._unsub: Any = None
@@ -290,6 +289,7 @@ class XiaomiVacuumMapCamera(Camera):
         points = unpack_path(content)
         if not points:
             return None
+        self._trajectory_object = path_name
         _LOGGER.info("the path of the robot is read, %s points", len(points))
         return points
 
@@ -328,31 +328,22 @@ class XiaomiVacuumMapCamera(Camera):
         cloud = self._data["cloud"]
         did = self._data.get("did") or DEFAULT_DID
 
-        map_data = self._map_data
-        # The robot writes a new map when it starts to clean. The map
-        # is only read again when that happens.
-        live_object = self._read_map_object()
-        if live_object and live_object != self._map_object:
-            self._map_data = None
-        if not map_data or self._map_data is None:
-            map_data = self._fetch_map()
-            if not map_data:
-                return None
-            self._map_data = map_data
+        map_data = self._fetch_map()
+        if not map_data:
+            return None
 
         position = self._read_position()
-        # The place of the robot in the state of the vacuum is only
-        # changed now and then, so the cloud is asked as well. The
-        # answer of the cloud is the place where the robot really is.
-        cloud_position = cloud.get_position(did)
-        if cloud_position:
-            position = cloud_position
-        if position is None:
-            position = self._read_position()
 
         # The path that the robot drove is a file of its own, right
         # after the map of the robot.
         path = self._read_path(cloud)
+
+        # The last point of the path is where the robot is right now.
+        # The place of the robot in the state of the vacuum is only
+        # changed now and then, so it is often the place of a moment
+        # ago. The path is read all the time, so it is much fresher.
+        if path:
+            position = [path[-1][1], path[-1][2]]
 
         try:
             picture = draw(map_data, position, path=path)
@@ -411,24 +402,32 @@ class XiaomiVacuumMapCamera(Camera):
         when something really changed, but the path of the robot is
         read all the time.
         """
+        # The map is fetched every two seconds. The time that the fetch
+        # takes is taken off the wait, so the period stays the same even
+        # when the fetch is slow.
+        deadline = _now()
         while True:
-            await asyncio.sleep(WATCH_INTERVAL)
             try:
                 moving = self._robot_is_moving()
                 self._moving = moving
-                # The map itself is kept and only the path of the robot
-                # is read again, so the picture can be refreshed all the
-                # time. The place of the robot also comes back then, so
-                # the robot is at the dock in the picture as soon as it
-                # is there.
-                if self._image is not None and _now() - self._last_fetch > LIVE_SCAN_INTERVAL:
+                if self._image is not None and _now() >= deadline:
+                    started = _now()
                     await self.async_refresh()
+                    # The time that the fetch took is part of the period,
+                    # so the picture comes every two seconds and not every
+                    # two seconds plus the time of the fetch.
+                    deadline = started + LIVE_SCAN_INTERVAL
             except asyncio.CancelledError:
                 raise
             except Exception:  # pylint: disable=broad-except
                 # The watcher must not stop when something goes wrong
                 # once.
                 _LOGGER.exception("the watcher of the map failed")
+            wait = deadline - _now()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            else:
+                await asyncio.sleep(0.1)
 
     async def async_start(self) -> None:
         """Start the watcher that keeps the map up to date."""

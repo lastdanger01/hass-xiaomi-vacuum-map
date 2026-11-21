@@ -17,11 +17,11 @@ DEFAULT_SCAN_INTERVAL = 300
 # How often the map is fetched while the robot is on the move. The
 # path of the robot changes all the time then, so it is fetched much
 # more often than when the robot stands still.
-LIVE_SCAN_INTERVAL = 5
+LIVE_SCAN_INTERVAL = 2
 
 # How often the camera looks at the state of the robot to see whether
 # it started to move or came to a stop.
-WATCH_INTERVAL = 3
+WATCH_INTERVAL = 1
 
 # The names of the maps of the robot. The first one is the map of the
 # last cleaning, the ones after it are the maps that are named.
