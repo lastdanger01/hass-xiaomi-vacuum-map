@@ -17,12 +17,12 @@ const CARD_VERSION = "1.0.0";
 
 class XiaomiVacuumMapCard extends HTMLElement {
   static getConfigElement() {
-    return document.createElement("xiaomi-vacuum-map-card-editor");
+    return document.createElement("xiaomi-vacuum-map-go-card-editor");
   }
 
   static getStubConfig() {
     return {
-      type: "custom:xiaomi-vacuum-map-card",
+      type: "custom:xiaomi-vacuum-map-go-card",
       entity: "camera.vacuum_map",
       title: "掃地機器人",
     };
@@ -190,10 +190,16 @@ class XiaomiVacuumMapCard extends HTMLElement {
     if (!state) return;
 
     const img = this._root.querySelector("img.map");
-    const src = `/api/camera_proxy/${this._config.entity}?t=${Date.now()}`;
-    if (img.getAttribute("data-src") !== src) {
-      img.setAttribute("data-src", src);
-      img.setAttribute("src", src);
+    // The picture is taken from the address that Home Assistant gives
+    // for the camera. That address carries a token of its own, so the
+    // picture comes without a name and without a password.
+    const picture = state.attributes["entity_picture"];
+    if (picture) {
+      const src = picture + (picture.includes("?") ? "&" : "?") + "t=" + Date.now();
+      if (img.getAttribute("data-src") !== src) {
+        img.setAttribute("data-src", src);
+        img.setAttribute("src", src);
+      }
     }
 
     const el = this._root.querySelector(".state");
@@ -389,12 +395,12 @@ class XiaomiVacuumMapCardEditor extends HTMLElement {
   }
 }
 
-if (!customElements.get("xiaomi-vacuum-map-card")) {
-  customElements.define("xiaomi-vacuum-map-card", XiaomiVacuumMapCard);
+if (!customElements.get("xiaomi-vacuum-map-go-card")) {
+  customElements.define("xiaomi-vacuum-map-go-card", XiaomiVacuumMapCard);
 }
-if (!customElements.get("xiaomi-vacuum-map-card-editor")) {
+if (!customElements.get("xiaomi-vacuum-map-go-card-editor")) {
   customElements.define(
-    "xiaomi-vacuum-map-card-editor",
+    "xiaomi-vacuum-map-go-card-editor",
     XiaomiVacuumMapCardEditor
   );
 }
@@ -406,9 +412,9 @@ console.info(`%c XIAOMI VACUUM MAP CARD %c ${CARD_VERSION} `,
   "background:#222;color:#fff");
 
 window.customCards = window.customCards || [];
-if (!window.customCards.some((card) => card.type === "xiaomi-vacuum-map-card")) {
+if (!window.customCards.some((card) => card.type === "xiaomi-vacuum-map-go-card")) {
   window.customCards.push({
-    type: "xiaomi-vacuum-map-card",
+    type: "xiaomi-vacuum-map-go-card",
     name: "Xiaomi Vacuum Map Card",
     description: "掃地機器人地圖，可點擊地圖指定位置",
     preview: true,
