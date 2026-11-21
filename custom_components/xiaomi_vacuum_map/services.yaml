@@ -1,0 +1,118 @@
+clean_room:
+  name: 清潔房間
+  description: 讓機器人清掃某一個房間。
+  fields:
+    entity_id:
+      name: 地圖實體
+      description: 地圖的相機實體。
+      required: true
+      selector:
+        entity:
+          integration: xiaomi_vacuum_map
+    room_id:
+      name: 房間編號
+      description: 要清掃的房間編號。
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 99
+          mode: box
+    repeats:
+      name: 次數
+      description: 清掃幾次。
+      required: false
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 3
+          mode: box
+
+clean_zone:
+  name: 清潔區域
+  description: 讓機器人清掃地圖上框選的那一塊。
+  fields:
+    entity_id:
+      name: 地圖實體
+      description: 地圖的相機實體。
+      required: true
+      selector:
+        entity:
+          integration: xiaomi_vacuum_map
+    x:
+      name: 起點 X
+      description: 起點在圖片上的位置，單位是像素。
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    y:
+      name: 起點 Y
+      description: 起點在圖片上的位置，單位是像素。
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    x2:
+      name: 終點 X
+      description: 終點在圖片上的位置，單位是像素。
+      required: false
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    y2:
+      name: 終點 Y
+      description: 終點在圖片上的位置，單位是像素。
+      required: false
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    repeats:
+      name: 次數
+      description: 清掃幾次。
+      required: false
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 3
+          mode: box
+
+go_to_point:
+  name: 前往地圖上的一點
+  description: 讓機器人前往地圖上指定的位置。
+  fields:
+    entity_id:
+      name: 地圖實體
+      description: 地圖的相機實體。
+      required: true
+      selector:
+        entity:
+          integration: xiaomi_vacuum_map
+    x:
+      name: X
+      description: 位置在圖片上的橫座標，單位是像素。
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    y:
+      name: Y
+      description: 位置在圖片上的縱座標，單位是像素。
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box

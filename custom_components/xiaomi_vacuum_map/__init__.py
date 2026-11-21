@@ -11,9 +11,11 @@ robot are read.
 
 import json
 import logging
+import os
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
 
 from .const import (
@@ -28,6 +30,13 @@ from .const import (
     MAP_OBJECTS,
 )
 from .cloud import XiaomiCloud
+from .services import async_register_services, async_unregister_services
+
+# The card that lets the robot be sent to a place is a file of its own.
+# It is served from here, so that it can be loaded by the browser.
+CARD_URL = "/xiaomi_vacuum_map/xiaomi-vacuum-map-card.js"
+CARD_FOLDER = "frontend"
+CARD_FLAG = "xiaomi_vacuum_map_card_registered"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,6 +114,8 @@ def _make_cloud(account: dict[str, str]) -> XiaomiCloud:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the integration from a config entry."""
+    await async_register_services(hass)
+    await _register_card(hass)
     did = entry.data.get(CONF_DID) or DEFAULT_DID
     map_object = entry.data.get(CONF_MAP) or MAP_OBJECTS[0]
 
@@ -150,11 +161,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+async def _register_card(hass: HomeAssistant) -> None:
+    """Let the browser get the card that shows the map.
+
+    The card is a file of its own in the folder of the integration. It
+    is served from here, so that it works without anything else being
+    installed.
+    """
+    if CARD_FLAG in hass.data:
+        return
+    folder = hass.config.path(f"custom_components/{DOMAIN}/{CARD_FOLDER}")
+    if not os.path.isdir(folder):
+        return
+    try:
+        await hass.http.async_register_static_paths([
+            StaticPathConfig(f"/{DOMAIN}", folder, False)])
+    except RuntimeError:
+        # The path is already registered, that is all right.
+        pass
+    hass.data[CARD_FLAG] = True
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, [Platform.CAMERA])
     if unloaded:
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        if not hass.data.get(DOMAIN):
+            await async_unregister_services(hass)
     return unloaded
 
 

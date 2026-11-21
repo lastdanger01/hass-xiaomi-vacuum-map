@@ -19,9 +19,11 @@ from .const import (
     DOMAIN,
     LIVE_SCAN_INTERVAL,
     MAP_OBJECTS,
+    MAP_SCALE,
     WATCH_INTERVAL,
 )
-from .map_renderer import draw, unpack_path
+from .geometry import MapGeometry
+from .map_renderer import draw, unpack_grid, unpack_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +76,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
     # That vacuum is looked for again later, because the place of the
     # robot only shows up after the first update from the cloud.
     hass.bus.async_listen(EVENT_STATE_CHANGED, camera._on_state_changed)
+    # The camera is put in the data of the entry, so that the services
+    # can find it when a place on the map is picked.
+    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})[
+        "camera"] = camera
 
 
 def _find_vacuum(hass: HomeAssistant, did: str) -> str | None:
@@ -82,6 +88,7 @@ def _find_vacuum(hass: HomeAssistant, did: str) -> str | None:
     The integration xiaomi_miot keeps the place of the robot in the state
     of the vacuum, so the map does not have to ask the cloud for it.
     """
+    fallback = None
     for state in hass.states.async_all("vacuum"):
         attributes = state.attributes
         # The map of the robot is named after the robot itself.
@@ -90,7 +97,9 @@ def _find_vacuum(hass: HomeAssistant, did: str) -> str | None:
             continue
         if attributes.get("vacuum_map.vacuum_position") is not None:
             return state.entity_id
-    return None
+        if fallback is None:
+            fallback = state.entity_id
+    return fallback
 
 
 class XiaomiVacuumMapCamera(Camera):
@@ -117,11 +126,13 @@ class XiaomiVacuumMapCamera(Camera):
         self._moving = False
         self._task: asyncio.Task | None = None
         self._unsub: Any = None
+        self._map_data: dict | None = None
+        self._grid: bytes | None = None
 
     @property
     def extra_state_attributes(self):
         """The details of the map."""
-        return {
+        attributes = {
             "map_object": self._data.get("map"),
             "did": self._data.get("did"),
             "last_fetch": self._last_fetch,
@@ -131,6 +142,49 @@ class XiaomiVacuumMapCamera(Camera):
             "trajectory_object": self._trajectory_object,
             "moving": self._moving,
         }
+        # The size of the map and the place of every cell of it. A card
+        # needs this to turn a place that is picked into the place in
+        # the house that the robot knows.
+        if self._map_data is not None:
+            attributes["map_geometry"] = MapGeometry(
+                self._map_data, MAP_SCALE).as_dict()
+            attributes["rooms"] = self._rooms()
+        return attributes
+
+    def _rooms(self) -> list[dict]:
+        """The rooms of the map, with the number that the robot uses."""
+        if self._map_data is None:
+            return []
+        geometry = MapGeometry(self._map_data, MAP_SCALE)
+        rooms = []
+        for grid_id, room_id in geometry.room_id_by_grid.items():
+            rooms.append({
+                "grid_id": grid_id,
+                "room_id": room_id,
+                "color": geometry.room_color_by_grid.get(grid_id, 0),
+            })
+        return sorted(rooms, key=lambda room: room["room_id"])
+
+    @property
+    def geometry(self) -> MapGeometry | None:
+        """The place of every cell of the map."""
+        if self._map_data is None:
+            return None
+        return MapGeometry(self._map_data, MAP_SCALE)
+
+    @property
+    def grid(self) -> bytes | None:
+        """The grid of the map, one byte for every cell."""
+        return self._grid
+
+    @property
+    def vacuum_entity_id(self) -> str | None:
+        """The vacuum of xiaomi_miot that belongs to this robot.
+
+        The commands to the robot are sent to that vacuum, because it
+        holds the account and the way to the robot.
+        """
+        return self._vacuum_entity
 
     def set_vacuum_entity(self, entity_id: str) -> None:
         """Watch the vacuum of xiaomi_miot for the place of the robot.
@@ -331,6 +385,11 @@ class XiaomiVacuumMapCamera(Camera):
         map_data = self._fetch_map()
         if not map_data:
             return None
+        self._map_data = map_data
+        try:
+            self._grid = unpack_grid(map_data)
+        except (ValueError, KeyError):
+            self._grid = None
 
         position = self._read_position()
 
@@ -436,6 +495,13 @@ class XiaomiVacuumMapCamera(Camera):
 
     async def async_start(self) -> None:
         """Start the watcher that keeps the map up to date."""
+        # The vacuum of xiaomi_miot is looked for now, so that a command
+        # to the robot can be sent even when the place of the robot is
+        # not known yet.
+        if self._vacuum_entity is None:
+            found = _find_vacuum(self.hass, self._data.get("did") or "")
+            if found:
+                self._vacuum_entity = found
         await self.async_refresh()
         self._task = self.hass.async_create_task(self._watch())
 

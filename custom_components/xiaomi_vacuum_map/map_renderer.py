@@ -18,6 +18,8 @@ import struct
 import zlib
 from typing import Any
 
+from .geometry import MapGeometry
+
 # The colours of the rooms, the key is the colour number of the cloud.
 ROOM_COLORS: dict[int, tuple[int, int, int]] = {
     1: (222, 142, 62),
@@ -130,9 +132,9 @@ def draw(map_data: dict[str, Any], position: list | None = None,
     image = base.resize((width * scale, height * scale), Image.BICUBIC)
     painter = ImageDraw.Draw(image)
 
-    origin_x = float(map_data.get("origin_x", 0))
-    origin_y = float(map_data.get("origin_y", 0))
-    resolution = float(map_data.get("resolution", 50) or 50)
+    # The place of every cell of the map is worked out in one place, so
+    # that the picture and the commands to the robot always agree.
+    geometry = MapGeometry(map_data, scale)
 
     def cell_of(x: Any, y: Any) -> tuple[int, int] | None:
         """The cell of the map of the given place in the house.
@@ -140,20 +142,11 @@ def draw(map_data: dict[str, Any], position: list | None = None,
         The row is the row of the grid of the robot, which starts at the
         bottom of the house.
         """
-        if x is None or y is None:
-            return None
-        col = int(round((float(x) - origin_x) / resolution))
-        row = int(round((float(y) - origin_y) / resolution))
-        if not (0 <= row < height and 0 <= col < width):
-            return None
-        return col, row
+        return geometry.cell_of(x, y)
 
     def pixel_of(cell: tuple[int, int]) -> tuple[int, int]:
         """The place in the picture of a cell of the grid."""
-        col, row = cell
-        return (col * scale + scale // 2,
-                (height - 1 - row) * scale + scale // 2)
-
+        return geometry.pixel_of_cell(*cell)
     def mark(x: Any, y: Any, color: tuple[int, int, int], name: str) -> None:
         cell = cell_of(x, y)
         if cell is None:

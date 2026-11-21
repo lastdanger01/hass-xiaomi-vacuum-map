@@ -23,6 +23,11 @@ LIVE_SCAN_INTERVAL = 2
 # it started to move or came to a stop.
 WATCH_INTERVAL = 1
 
+# How many pixels of the picture there are for every cell of the grid
+# of the robot. The picture is drawn with twice as many and made
+# smaller afterwards, so that the walls do not look like a staircase.
+MAP_SCALE = 4
+
 # The names of the maps of the robot. The first one is the map of the
 # last cleaning, the ones after it are the maps that are named.
 MAP_OBJECTS = (
