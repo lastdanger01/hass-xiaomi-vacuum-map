@@ -9,6 +9,7 @@ from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -26,6 +27,9 @@ from .geometry import MapGeometry
 from .map_renderer import draw, unpack_grid, unpack_path
 
 _LOGGER = logging.getLogger(__name__)
+
+# The domain of the integration that holds the robot itself.
+MIOT_DOMAIN = "xiaomi_miot"
 
 # The states of the vacuum that mean that the robot is on the move.
 ACTIVE_STATES = ("cleaning", "returning")
@@ -82,12 +86,58 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
         "camera"] = camera
 
 
-def _find_vacuum(hass: HomeAssistant, did: str) -> str | None:
+def _miot_entries_with_did(hass: HomeAssistant, did: str,
+                           map_object: str = "") -> set[str]:
+    """The accounts of xiaomi_miot that hold the robot with the given id.
+
+    Every account of xiaomi_miot keeps the list of the robots that are
+    in it. The robot of this house is told apart by that list.
+
+    The name of the map of the robot also holds the number of the
+    account that the robot is in, at the front of it. That number is
+    the title of the account as well, but several accounts can have
+    the same title, so it is only used when the list of the robots
+    tells nothing.
+    """
+    entries: set[str] = set()
+    account = ""
+    if map_object:
+        account = str(map_object).split("/")[0]
+    by_title: set[str] = set()
+    for entry in hass.config_entries.async_entries(MIOT_DOMAIN):
+        dids = [str(item) for item in (entry.data.get("did_list") or [])]
+        if did and did in dids:
+            entries.add(entry.entry_id)
+            continue
+        if account and entry.title.endswith(account):
+            by_title.add(entry.entry_id)
+    if not entries:
+        entries = by_title
+    return entries
+
+
+def _find_vacuum(hass: HomeAssistant, did: str,
+                 map_object: str = "") -> str | None:
     """Find the vacuum of xiaomi_miot that belongs to the given robot.
 
-    The integration xiaomi_miot keeps the place of the robot in the state
-    of the vacuum, so the map does not have to ask the cloud for it.
+    Some models of the robot do not tell where they are in their state,
+    so the map of the robot cannot be found there. The account that
+    holds the robot is looked at instead, and the vacuum that belongs
+    to that account is the one that is wanted.
     """
+    entries = _miot_entries_with_did(hass, did, map_object)
+    if entries:
+        try:
+            registry = er.async_get(hass)
+        except Exception:  # pylint: disable=broad-except
+            registry = None
+        if registry is not None:
+            for entity in registry.entities.values():
+                if (entity.domain == "vacuum"
+                        and entity.platform == MIOT_DOMAIN
+                        and entity.config_entry_id in entries):
+                    return entity.entity_id
+
     fallback = None
     for state in hass.states.async_all("vacuum"):
         attributes = state.attributes
@@ -99,6 +149,14 @@ def _find_vacuum(hass: HomeAssistant, did: str) -> str | None:
             return state.entity_id
         if fallback is None:
             fallback = state.entity_id
+
+    # There is one robot in this house, so when nothing else can be
+    # found, the only vacuum of xiaomi_miot is the robot of the map.
+    vacuums = [state.entity_id for state in hass.states.async_all("vacuum")]
+    if len(vacuums) == 1:
+        _LOGGER.warning("the robot of the map is taken to be %s, because "
+                        "nothing else could be found", vacuums[0])
+        return vacuums[0]
     return fallback
 
 
@@ -138,6 +196,8 @@ class XiaomiVacuumMapCamera(Camera):
             "last_fetch": self._last_fetch,
             "has_picture": self._image is not None,
             "robot_position": self._position,
+            "vacuum_entity_id": self._vacuum_entity,
+            "vacuum_lookup": self._lookup_note(),
             "live_map_object": self._map_object,
             "trajectory_object": self._trajectory_object,
             "moving": self._moving,
@@ -150,6 +210,40 @@ class XiaomiVacuumMapCamera(Camera):
                 self._map_data, MAP_SCALE).as_dict()
             attributes["rooms"] = self._rooms()
         return attributes
+
+    def _lookup_note(self) -> dict[str, Any]:
+        """Why the vacuum of the robot was found, or why it was not.
+
+        The robot of this house is told apart by the account of Xiaomi
+        that holds it. Some models of the robot do not say where they
+        are in their state, so that way cannot be used.
+        """
+        did = self._data.get("did") or ""
+        entries = _miot_entries_with_did(self.hass, did,
+                                         self._data.get("map") or "")
+        note: dict[str, Any] = {
+            "did": did,
+            "miot_entries_with_did": sorted(entries),
+            "vacuum_states": [
+                state.entity_id for state in self.hass.states.async_all("vacuum")
+            ],
+        }
+        try:
+            registry = er.async_get(self.hass)
+        except Exception as err:  # pylint: disable=broad-except
+            note["registry_error"] = str(err)
+            return note
+        note["vacuum_entities"] = [
+            {
+                "entity_id": entity.entity_id,
+                "platform": entity.platform,
+                "config_entry_id": entity.config_entry_id,
+                "match": entity.config_entry_id in entries,
+            }
+            for entity in registry.entities.values()
+            if entity.domain == "vacuum"
+        ]
+        return note
 
     def _rooms(self) -> list[dict]:
         """The rooms of the map, with the number that the robot uses."""
@@ -499,7 +593,9 @@ class XiaomiVacuumMapCamera(Camera):
         # to the robot can be sent even when the place of the robot is
         # not known yet.
         if self._vacuum_entity is None:
-            found = _find_vacuum(self.hass, self._data.get("did") or "")
+            found = _find_vacuum(self.hass,
+                                 self._data.get("did") or DEFAULT_DID,
+                                 self._data.get("map") or "")
             if found:
                 self._vacuum_entity = found
         await self.async_refresh()

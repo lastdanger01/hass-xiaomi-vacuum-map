@@ -195,10 +195,12 @@ class XiaomiVacuumMapCard extends HTMLElement {
     // picture comes without a name and without a password.
     const picture = state.attributes["entity_picture"];
     if (picture) {
-      const src = picture + (picture.includes("?") ? "&" : "?") + "t=" + Date.now();
-      if (img.getAttribute("data-src") !== src) {
-        img.setAttribute("data-src", src);
-        img.setAttribute("src", src);
+      // The address carries a token of its own, so it must not be
+      // changed. The picture is fetched without keeping it in the
+      // cache of the browser, so that a new map is seen right away.
+      if (img.getAttribute("data-src") !== picture) {
+        img.setAttribute("data-src", picture);
+        this._loadPicture(picture, img);
       }
     }
 
@@ -210,6 +212,25 @@ class XiaomiVacuumMapCard extends HTMLElement {
     if (!this._roomsDrawn) {
       this._roomsDrawn = true;
       this._renderRooms();
+    }
+  }
+
+  async _loadPicture(url, img) {
+    // The picture is fetched by hand, so that the old one is not shown
+    // when the map has changed. The address of the picture is left
+    // alone, because the token in it would not hold any more.
+    try {
+      const answer = await fetch(url, { cache: "reload" });
+      if (!answer.ok) throw new Error("the picture came back " + answer.status);
+      const blob = await answer.blob();
+      if (img.getAttribute("data-src") !== url) return;
+      if (this._pictureUrl) URL.revokeObjectURL(this._pictureUrl);
+      this._pictureUrl = URL.createObjectURL(blob);
+      img.setAttribute("src", this._pictureUrl);
+    } catch (err) {
+      // Without the hand of the picture, the address itself is used.
+      // The browser then shows the picture with its own rules.
+      if (img.getAttribute("data-src") === url) img.setAttribute("src", url);
     }
   }
 

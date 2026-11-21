@@ -89,7 +89,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
         room_id = call.data.get(ATTR_ROOM_ID)
         if room_id is None:
             raise CommandError("no room was picked")
-        await clean_rooms(hass, camera.vacuum_entity_id, [room_id])
+        await clean_rooms(hass, camera.vacuum_entity_id, [room_id],
+                          int(call.data.get(ATTR_REPEATS, 1)))
 
     async def _zone(call: ServiceCall) -> None:
         """Clean the block of the map that is picked."""
@@ -125,7 +126,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         except CommandError:
             if not rooms:
                 raise
-            await clean_rooms(hass, camera.vacuum_entity_id, rooms)
+            await clean_rooms(hass, camera.vacuum_entity_id, rooms, repeats)
 
     async def _point(call: ServiceCall) -> None:
         """Send the robot to the place that is picked."""
