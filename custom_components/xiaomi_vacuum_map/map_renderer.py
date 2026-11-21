@@ -78,8 +78,13 @@ def unpack_path(content: bytes) -> list[tuple[int, int, int]]:
 
 
 def draw(map_data: dict[str, Any], position: list | None = None,
-         scale: int = 2, path: list[tuple[int, int, int]] | None = None) -> bytes:
-    """Draw the picture of the map and give it back as png bytes."""
+         scale: int = 4, path: list[tuple[int, int, int]] | None = None) -> bytes:
+    """Draw the picture of the map and give it back as png bytes.
+
+    The picture is drawn with more pixels than it finally has, and is
+    made smaller afterwards. That takes the rough edges off the walls
+    and the robot, so the map does not look like a staircase.
+    """
     from PIL import Image, ImageDraw
 
     width = int(map_data["width"])
@@ -94,13 +99,18 @@ def draw(map_data: dict[str, Any], position: list | None = None,
         color = ROOM_COLORS.get(int(room.get("color", 0)), (150, 150, 150))
         rooms[int(room["grid_id"])] = color
 
-    image = Image.new("RGB", (width * scale, height * scale), FREE)
-    painter = ImageDraw.Draw(image)
+    # The floor of the house is drawn with many more pixels than the
+    # picture finally has, and is made smaller afterwards. That takes
+    # the stair steps off the walls. The path and the robot are drawn
+    # afterwards, on the picture itself, so they stay sharp.
+    ss = scale * 2
+    base = Image.new("RGB", (width * ss, height * ss), FREE)
+    base_painter = ImageDraw.Draw(base)
     for row in range(height):
         # The grid of the robot starts at the bottom of the house and
         # goes up, but the first row of a picture is the top of it, so
         # the rows are put in the picture the other way round.
-        y0 = (height - 1 - row) * scale
+        y0 = (height - 1 - row) * ss
         for col in range(width):
             value = grid[row * width + col]
             if value == 0:
@@ -111,8 +121,14 @@ def draw(map_data: dict[str, Any], position: list | None = None,
                 color = OBSTACLE
             else:
                 color = rooms.get(value, (150, 150, 150))
-            x0 = col * scale
-            painter.rectangle([x0, y0, x0 + scale - 1, y0 + scale - 1], fill=color)
+            x0 = col * ss
+            base_painter.rectangle([x0, y0, x0 + ss - 1, y0 + ss - 1],
+                                   fill=color)
+
+    # Bicubic is used and not Lanczos, because Lanczos rings around the
+    # sharp edges of the walls.
+    image = base.resize((width * scale, height * scale), Image.BICUBIC)
+    painter = ImageDraw.Draw(image)
 
     origin_x = float(map_data.get("origin_x", 0))
     origin_y = float(map_data.get("origin_y", 0))
@@ -135,7 +151,8 @@ def draw(map_data: dict[str, Any], position: list | None = None,
     def pixel_of(cell: tuple[int, int]) -> tuple[int, int]:
         """The place in the picture of a cell of the grid."""
         col, row = cell
-        return col * scale + scale // 2, (height - 1 - row) * scale + scale // 2
+        return (col * scale + scale // 2,
+                (height - 1 - row) * scale + scale // 2)
 
     def mark(x: Any, y: Any, color: tuple[int, int, int], name: str) -> None:
         cell = cell_of(x, y)
@@ -144,7 +161,8 @@ def draw(map_data: dict[str, Any], position: list | None = None,
         cx, cy = pixel_of(cell)
         radius = 3 * scale
         painter.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
-                        fill=color, outline=(255, 255, 255), width=1)
+                        fill=color, outline=(255, 255, 255),
+                        width=max(1, scale // 2))
 
     def draw_robot(x: Any, y: Any, heading: float | None) -> None:
         """Draw the robot as a round body that faces the way it drives.
@@ -160,7 +178,7 @@ def draw(map_data: dict[str, Any], position: list | None = None,
         if cell is None:
             return
         cx, cy = pixel_of(cell)
-        radius = max(5, 5 * scale)
+        radius = max(8, 5 * scale)
         # The angle of the picture runs the other way than the angle of
         # the house, so the sign of the angle is turned around.
         angle = math.radians(-(heading or 0.0))
@@ -227,7 +245,7 @@ def draw(map_data: dict[str, Any], position: list | None = None,
             color = PATH if path[index][0] == 1 else PATH_DONE
             painter.line(
                 [pixel_of(start), pixel_of(end)],
-                fill=color, width=max(1, scale),
+                fill=color, width=max(2, scale),
             )
 
     mark(map_data.get("pile_x"), map_data.get("pile_y"), DOCK, "dock")
