@@ -101,17 +101,60 @@ class MapGeometry:
         return (col * self.scale + self.scale // 2,
                 (self.height - 1 - row) * self.scale + self.scale // 2)
 
+    def mm_of_pixel(self, px: float, py: float) -> tuple[int, int]:
+        """The place in the house that is shown at a place of the picture.
+
+        The place is not rounded to the edge of a cell, because the
+        robot of this house takes the place as it is given. The block
+        that the app of the phone gives holds places that lie inside a
+        cell.
+        """
+        if self.scale <= 0:
+            return 0, 0
+        col = float(px) / self.scale
+        # The first row of the picture is the top of the house, the
+        # first row of the grid of the robot is the bottom of it.
+        row = self.height - float(py) / self.scale
+        x = self.origin_x + col * self.resolution
+        y = self.origin_y + row * self.resolution
+        return int(round(x)), int(round(y))
+
     def cell_rect_to_mm(self, col1: int, row1: int,
                         col2: int, row2: int) -> list[int]:
         """The corners of a block of cells, in millimetres.
 
-        The corners are given the way the robot wants them: the first
-        corner, the second corner over the first one, the corner
-        opposite the first one and the last corner.
+        The corners are given the way the robot wants them. The robot
+        of this house writes them the way the app of the phone does:
+        the upper left corner first, then the lower left corner, then
+        the lower right corner and the upper right corner last.
         """
-        x1, y1 = self.mm_of_cell(min(col1, col2), min(row1, row2))
-        x2, y2 = self.mm_of_cell(max(col1, col2), max(row1, row2))
-        return [x1, y1, x1, y2, x2, y2, x2, y1]
+        left = min(col1, col2)
+        right = max(col1, col2)
+        # The row of the grid of the robot starts at the bottom of the
+        # house, so the row that is the biggest one is the top.
+        bottom = min(row1, row2)
+        top = max(row1, row2)
+        x_left = self.origin_x + left * self.resolution
+        x_right = self.origin_x + (right + 1) * self.resolution
+        y_bottom = self.origin_y + bottom * self.resolution
+        y_top = self.origin_y + (top + 1) * self.resolution
+        return [int(x_left), int(y_top), int(x_left), int(y_bottom),
+                int(x_right), int(y_bottom), int(x_right), int(y_top)]
+
+    def pixel_rect_to_mm(self, px1: float, py1: float,
+                         px2: float, py2: float) -> list[int]:
+        """The corners of a block of the picture, in millimetres.
+
+        The corners are given the way the robot wants them: the upper
+        left corner first, then the lower left corner, then the lower
+        right corner and the upper right corner last. This is the way
+        that the robot of this house was seen to write them down.
+        """
+        x1, y1 = self.mm_of_pixel(px1, py1)
+        x2, y2 = self.mm_of_pixel(px2, py2)
+        left, right = min(x1, x2), max(x1, x2)
+        top, bottom = max(y1, y2), min(y1, y2)
+        return [left, top, left, bottom, right, bottom, right, top]
 
     def room_id_of_cell(self, grid: bytes, col: int, row: int) -> int | None:
         """The number of the room that a cell belongs to.

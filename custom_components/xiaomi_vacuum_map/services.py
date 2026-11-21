@@ -75,6 +75,21 @@ def _geometry_of(camera) -> MapGeometry | None:
     return camera.geometry if camera is not None else None
 
 
+def _robot_of(camera) -> str:
+    """The vacuum of xiaomi_miot that the commands are sent to.
+
+    The commands cannot be sent without it, so the trouble is told
+    plainly, instead of the service of xiaomi_miot complaining about
+    an address that is not there.
+    """
+    entity_id = camera.vacuum_entity_id if camera is not None else None
+    if not entity_id:
+        raise CommandError(
+            "the robot of the map is not known yet, so the command cannot "
+            "be sent to it")
+    return entity_id
+
+
 async def async_register_services(hass: HomeAssistant) -> None:
     """Register the services of the integration."""
     if hass.services.has_service(DOMAIN, SERVICE_ROOM):
@@ -89,7 +104,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         room_id = call.data.get(ATTR_ROOM_ID)
         if room_id is None:
             raise CommandError("no room was picked")
-        await clean_rooms(hass, camera.vacuum_entity_id, [room_id],
+        await clean_rooms(hass, _robot_of(camera), [room_id],
                           int(call.data.get(ATTR_REPEATS, 1)))
 
     async def _zone(call: ServiceCall) -> None:
@@ -113,7 +128,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 raise CommandError("the place that is picked is not on the map")
             col2, row2 = second
 
-        corners = geometry.cell_rect_to_mm(col1, row1, col2, row2)
+        # The corners are taken from the places in the picture, so that
+        # the block is the block that was picked and not the block of
+        # whole cells around it.
+        corners = geometry.pixel_rect_to_mm(
+            call.data[ATTR_X], call.data[ATTR_Y], x2 or call.data[ATTR_X],
+            y2 or call.data[ATTR_Y])
         repeats = int(call.data.get(ATTR_REPEATS, 1))
 
         # The robot of this model cleans the rooms that it knows best.
@@ -122,11 +142,11 @@ async def async_register_services(hass: HomeAssistant) -> None:
         # as well, for the models that do take it.
         rooms = rooms_of_rect(geometry, camera.grid, col1, row1, col2, row2)
         try:
-            await clean_zone(hass, camera.vacuum_entity_id, corners, repeats)
+            await clean_zone(hass, _robot_of(camera), corners, repeats)
         except CommandError:
             if not rooms:
                 raise
-            await clean_rooms(hass, camera.vacuum_entity_id, rooms, repeats)
+            await clean_rooms(hass, _robot_of(camera), rooms, repeats)
 
     async def _point(call: ServiceCall) -> None:
         """Send the robot to the place that is picked."""
@@ -137,8 +157,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
         cell = geometry.cell_of_pixel(call.data[ATTR_X], call.data[ATTR_Y])
         if cell is None:
             raise CommandError("the place that is picked is not on the map")
-        x, y = geometry.mm_of_cell(*cell)
-        await go_to_point(hass, camera.vacuum_entity_id, [x, y])
+        x, y = geometry.mm_of_pixel(call.data[ATTR_X], call.data[ATTR_Y])
+        await go_to_point(hass, _robot_of(camera), [x, y])
 
     hass.services.async_register(DOMAIN, SERVICE_ROOM, _room,
                                  schema=ROOM_SCHEMA)
