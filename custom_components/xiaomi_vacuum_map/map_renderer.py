@@ -39,10 +39,12 @@ PATH_DONE = (150, 150, 148)
 # The colours of the robot on the map. The body is light like the top
 # of the robot, the edge is dark and the front is red, so the way the
 # robot faces can be seen.
-ROBOT_BODY = (252, 252, 250)
-ROBOT_EDGE = (44, 46, 50)
+ROBOT_BODY = (250, 250, 248)
+ROBOT_EDGE = (38, 40, 46)
 ROBOT_FRONT = (214, 44, 44)
-ROBOT_TURRET = (96, 100, 106)
+ROBOT_TURRET = (108, 112, 120)
+ROBOT_BRUSH = (72, 76, 84)
+ROBOT_SHADOW = (196, 196, 192)
 
 
 def unpack_grid(map_data: dict[str, Any]) -> bytes:
@@ -147,10 +149,10 @@ def draw(map_data: dict[str, Any], position: list | None = None,
     def draw_robot(x: Any, y: Any, heading: float | None) -> None:
         """Draw the robot as a round body that faces the way it drives.
 
-        The body is a light circle with a dark edge, like the robot seen
-        from above. The front of it is red, and the little turret on
-        top of it is grey, so the place of the robot and the way it
-        faces can both be seen on the map.
+        The robot is drawn the way it is seen from above: a light round
+        body with a dark edge, a red bumper at the front, the turret
+        with the laser a little behind the middle and the brush on the
+        side. The way the robot faces can be seen on the map.
         """
         import math
 
@@ -158,7 +160,7 @@ def draw(map_data: dict[str, Any], position: list | None = None,
         if cell is None:
             return
         cx, cy = pixel_of(cell)
-        radius = max(4, 3 * scale)
+        radius = max(5, 5 * scale)
         # The angle of the picture runs the other way than the angle of
         # the house, so the sign of the angle is turned around.
         angle = math.radians(-(heading or 0.0))
@@ -169,21 +171,48 @@ def draw(map_data: dict[str, Any], position: list | None = None,
             return (cx + dx * cos_a - dy * sin_a,
                     cy + dx * sin_a + dy * cos_a)
 
+        # A soft shadow under the robot, so it stands out from the floor.
+        shadow = radius + max(1, radius // 5)
+        painter.ellipse([cx - shadow + 1, cy - shadow + 2,
+                         cx + shadow + 1, cy + shadow + 2],
+                        fill=ROBOT_SHADOW)
+
+        # The brush on the side of the robot comes out of the body.
+        for side in (-1, 1):
+            tip = point(radius * 0.62, side * radius * 0.92)
+            hub = point(radius * 0.40, side * radius * 0.74)
+            painter.line([hub, tip], fill=ROBOT_BRUSH,
+                         width=max(2, radius // 4))
+
+        # The body of the robot, with a dark edge around it.
         painter.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
                         fill=ROBOT_BODY, outline=ROBOT_EDGE,
-                        width=max(1, radius // 3))
-        # The bumper of the robot is at the front of it.
-        front = point(radius * 0.34, 0)
-        side_a = point(radius * 0.34, -radius * 0.62)
-        side_b = point(radius * 0.34, radius * 0.62)
-        painter.line([side_a, front, side_b], fill=ROBOT_FRONT,
-                     width=max(1, radius // 4), joint="curve")
-        # The turret with the laser sits a little behind the middle.
-        turret = point(-radius * 0.16, 0)
-        tr = max(1, radius // 3)
+                        width=max(1, radius // 4))
+
+        # The bumper of the robot is an arc at the front of it. The
+        # points of the arc are worked out in the frame of the robot,
+        # so the arc turns with the robot.
+        bumper = radius * 0.74
+        arc = []
+        for step in range(-14, 15):
+            deg = step * 5
+            rad = math.radians(deg)
+            arc.append(point(bumper * math.cos(rad), bumper * math.sin(rad)))
+        painter.line(arc, fill=ROBOT_FRONT, width=max(2, radius // 3),
+                     joint="curve")
+
+        # The turret with the laser sits behind the middle of the robot.
+        turret = point(-radius * 0.34, 0)
+        tr = max(2, radius // 3)
         painter.ellipse([turret[0] - tr, turret[1] - tr,
                          turret[0] + tr, turret[1] + tr],
-                        fill=ROBOT_TURRET)
+                        fill=ROBOT_TURRET, outline=ROBOT_EDGE,
+                        width=1)
+        # The little window of the camera on the turret.
+        lens = point(-radius * 0.34 + radius * 0.20, 0)
+        lr = max(1, tr // 2)
+        painter.ellipse([lens[0] - lr, lens[1] - lr,
+                         lens[0] + lr, lens[1] + lr], fill=ROBOT_EDGE)
 
     # The path that the robot drove is drawn as a line of the points of
     # it. The part that was really swept is in colour, the way to the
