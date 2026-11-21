@@ -36,6 +36,14 @@ ROBOT = (220, 40, 40)
 PATH = (232, 90, 60)
 PATH_DONE = (150, 150, 148)
 
+# The colours of the robot on the map. The body is light like the top
+# of the robot, the edge is dark and the front is red, so the way the
+# robot faces can be seen.
+ROBOT_BODY = (252, 252, 250)
+ROBOT_EDGE = (44, 46, 50)
+ROBOT_FRONT = (214, 44, 44)
+ROBOT_TURRET = (96, 100, 106)
+
 
 def unpack_grid(map_data: dict[str, Any]) -> bytes:
     """Take the grid of the map out of the json."""
@@ -136,6 +144,47 @@ def draw(map_data: dict[str, Any], position: list | None = None,
         painter.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
                         fill=color, outline=(255, 255, 255), width=1)
 
+    def draw_robot(x: Any, y: Any, heading: float | None) -> None:
+        """Draw the robot as a round body that faces the way it drives.
+
+        The body is a light circle with a dark edge, like the robot seen
+        from above. The front of it is red, and the little turret on
+        top of it is grey, so the place of the robot and the way it
+        faces can both be seen on the map.
+        """
+        import math
+
+        cell = cell_of(x, y)
+        if cell is None:
+            return
+        cx, cy = pixel_of(cell)
+        radius = max(4, 3 * scale)
+        # The angle of the picture runs the other way than the angle of
+        # the house, so the sign of the angle is turned around.
+        angle = math.radians(-(heading or 0.0))
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+        def point(dx: float, dy: float) -> tuple[float, float]:
+            """A place on the robot, in the picture."""
+            return (cx + dx * cos_a - dy * sin_a,
+                    cy + dx * sin_a + dy * cos_a)
+
+        painter.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
+                        fill=ROBOT_BODY, outline=ROBOT_EDGE,
+                        width=max(1, radius // 3))
+        # The bumper of the robot is at the front of it.
+        front = point(radius * 0.34, 0)
+        side_a = point(radius * 0.34, -radius * 0.62)
+        side_b = point(radius * 0.34, radius * 0.62)
+        painter.line([side_a, front, side_b], fill=ROBOT_FRONT,
+                     width=max(1, radius // 4), joint="curve")
+        # The turret with the laser sits a little behind the middle.
+        turret = point(-radius * 0.16, 0)
+        tr = max(1, radius // 3)
+        painter.ellipse([turret[0] - tr, turret[1] - tr,
+                         turret[0] + tr, turret[1] + tr],
+                        fill=ROBOT_TURRET)
+
     # The path that the robot drove is drawn as a line of the points of
     # it. The part that was really swept is in colour, the way to the
     # room and the way back to the dock is grey.
@@ -154,7 +203,8 @@ def draw(map_data: dict[str, Any], position: list | None = None,
 
     mark(map_data.get("pile_x"), map_data.get("pile_y"), DOCK, "dock")
     if position and len(position) >= 2:
-        mark(position[0], position[1], ROBOT, "robot")
+        heading = position[2] if len(position) > 2 else None
+        draw_robot(position[0], position[1], heading)
 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=True)

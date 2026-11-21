@@ -342,8 +342,13 @@ class XiaomiVacuumMapCamera(Camera):
         # The place of the robot in the state of the vacuum is only
         # changed now and then, so it is often the place of a moment
         # ago. The path is read all the time, so it is much fresher.
+        # The path has no direction in it, so the way the robot faces
+        # is taken from the state of the vacuum.
         if path:
+            heading = position[2] if position and len(position) > 2 else None
             position = [path[-1][1], path[-1][2]]
+            if heading is not None:
+                position.append(heading)
 
         try:
             picture = draw(map_data, position, path=path)
